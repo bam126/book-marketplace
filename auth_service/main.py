@@ -10,11 +10,12 @@ from pydantic import BaseModel
 from typing import Dict, Optional
 from datetime import datetime, timedelta
 import jwt
-import hashlib
+from passlib.hash import pbkdf2_sha256
 import os
 from service_discovery import consul_lifespan
 
-app = FastAPI(title="Auth Service", lifespan=consul_lifespan("auth", 8001))
+app = FastAPI(title="Auth Service", lifespan=consul_lifespan("auth", 8001),
+              root_path=os.getenv("ROOT_PATH", ""))
 
 
 @app.get("/health", tags=["Health"])
@@ -22,7 +23,9 @@ def health():
     return {"status": "healthy", "service": "auth"}
 
 
-SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-for-lab")
+SECRET_KEY = os.environ["SECRET_KEY"]
+if len(SECRET_KEY.encode()) < 32 or SECRET_KEY.startswith("REPLACE_"):
+    raise RuntimeError("Set SECRET_KEY to a random secret of at least 32 bytes")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -38,12 +41,12 @@ class UserLogin(BaseModel):
     username: str
     password: str
 
-# Хэширование через SHA-256 (надежно и без лишних зависимостей)
+# Passlib: PBKDF2-SHA256 с индивидуальной солью и 600 000 итераций.
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+    return pbkdf2_sha256.using(rounds=600_000).hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return hash_password(plain_password) == hashed_password
+    return pbkdf2_sha256.verify(plain_password, hashed_password)
 
 # Генерация JWT токена
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
