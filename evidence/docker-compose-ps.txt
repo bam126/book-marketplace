@@ -1,0 +1,6 @@
+NAME                             IMAGE                           COMMAND                  SERVICE     CREATED         STATUS                   PORTS
+book-marketplace-lab2-auth-1     book-marketplace-auth:lab2      "sh -c 'exec uvicorn…"   auth        6 minutes ago   Up 6 minutes (healthy)
+book-marketplace-lab2-consul-1   hashicorp/consul:1.22           "docker-entrypoint.s…"   consul      9 minutes ago   Up 2 minutes (healthy)   127.0.0.1:8500->8500/tcp
+book-marketplace-lab2-nginx-1    nginx:1.28-alpine               "/docker-entrypoint.…"   nginx       6 minutes ago   Up 5 minutes (healthy)   127.0.0.1:8080->80/tcp
+catalog-1                        book-marketplace-catalog:lab2   "sh -c 'exec uvicorn…"   catalog-1   6 minutes ago   Up 2 minutes (healthy)
+catalog-2                        book-marketplace-catalog:lab2   "sh -c 'exec uvicorn…"   catalog-2   6 minutes ago   Up 3 minutes (healthy)

@@ -7,8 +7,10 @@ from pydantic import BaseModel
 from typing import Dict, List, Optional
 import os
 import uvicorn
+from service_discovery import consul_lifespan
 
-app = FastAPI(title="Catalog Service")
+app = FastAPI(title="Catalog Service", lifespan=consul_lifespan("catalog", 8002),
+              root_path=os.getenv("ROOT_PATH", ""))
 
 # Получаем instance_id из переменной окружения (или значение по умолчанию)
 INSTANCE_ID = os.getenv("INSTANCE_NAME", "catalog-default")
@@ -35,6 +37,7 @@ class ProductUpdate(BaseModel):
 
 # 0. Healthcheck + информация об инстансе
 @app.get("/", tags=["Health"])
+@app.get("/health", tags=["Health"])
 def health():
     return {
         "status": "healthy",
