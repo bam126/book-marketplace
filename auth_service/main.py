@@ -12,8 +12,14 @@ from datetime import datetime, timedelta
 import jwt
 import hashlib
 import os
+from service_discovery import consul_lifespan
 
-app = FastAPI(title="Auth Service")
+app = FastAPI(title="Auth Service", lifespan=consul_lifespan("auth", 8001))
+
+
+@app.get("/health", tags=["Health"])
+def health():
+    return {"status": "healthy", "service": "auth"}
 
 
 SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-for-lab")

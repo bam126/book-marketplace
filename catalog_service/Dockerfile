@@ -4,6 +4,7 @@ WORKDIR /app
 COPY catalog_service/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY catalog_service/main.py ./main.py
+COPY service_discovery.py ./service_discovery.py
 RUN useradd --uid 10001 --create-home appuser
 USER appuser
 CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port \"$PORT\""]

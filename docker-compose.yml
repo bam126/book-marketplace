@@ -14,11 +14,14 @@ services:
     image: book-marketplace-auth:lab2
     environment:
       PORT: "8001"
+      INSTANCE_NAME: auth
+      SERVICE_HOST: auth
+      CONSUL_HTTP_ADDR: http://consul:8500
       SECRET_KEY: ${SECRET_KEY:?Create .env with a random SECRET_KEY}
     networks: [marketplace]
     healthcheck:
       <<: *app-health
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/docs', timeout=2)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"]
     stop_grace_period: 20s
 
   catalog-1:
@@ -30,6 +33,8 @@ services:
     environment:
       PORT: "8002"
       INSTANCE_NAME: catalog-1
+      SERVICE_HOST: catalog-1
+      CONSUL_HTTP_ADDR: http://consul:8500
     networks: [marketplace]
     healthcheck:
       <<: *app-health
@@ -43,6 +48,8 @@ services:
     environment:
       PORT: "8003"
       INSTANCE_NAME: catalog-2
+      SERVICE_HOST: catalog-2
+      CONSUL_HTTP_ADDR: http://consul:8500
     networks: [marketplace]
     healthcheck:
       <<: *app-health
