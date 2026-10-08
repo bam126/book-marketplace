@@ -1,0 +1,53 @@
+{
+  "auth": {
+    "ID": "auth",
+    "Service": "auth",
+    "Tags": [
+      "auth",
+      "lab2"
+    ],
+    "Meta": {},
+    "Port": 8001,
+    "Address": "auth",
+    "Weights": {
+      "Passing": 1,
+      "Warning": 1
+    },
+    "EnableTagOverride": false,
+    "Datacenter": "dc1"
+  },
+  "catalog-1": {
+    "ID": "catalog-1",
+    "Service": "catalog-1",
+    "Tags": [
+      "catalog",
+      "lab2"
+    ],
+    "Meta": {},
+    "Port": 8002,
+    "Address": "catalog-1",
+    "Weights": {
+      "Passing": 1,
+      "Warning": 1
+    },
+    "EnableTagOverride": false,
+    "Datacenter": "dc1"
+  },
+  "catalog-2": {
+    "ID": "catalog-2",
+    "Service": "catalog-2",
+    "Tags": [
+      "catalog",
+      "lab2"
+    ],
+    "Meta": {},
+    "Port": 8003,
+    "Address": "catalog-2",
+    "Weights": {
+      "Passing": 1,
+      "Warning": 1
+    },
+    "EnableTagOverride": false,
+    "Datacenter": "dc1"
+  }
+}
