@@ -15,6 +15,7 @@ services:
     environment:
       PORT: "8001"
       INSTANCE_NAME: auth
+      ROOT_PATH: /auth
       SERVICE_HOST: auth
       CONSUL_HTTP_ADDR: http://consul:8500
       SECRET_KEY: ${SECRET_KEY:?Create .env with a random SECRET_KEY}
@@ -33,6 +34,7 @@ services:
     environment:
       PORT: "8002"
       INSTANCE_NAME: catalog-1
+      ROOT_PATH: /catalog
       SERVICE_HOST: catalog-1
       CONSUL_HTTP_ADDR: http://consul:8500
     networks: [marketplace]
@@ -48,6 +50,7 @@ services:
     environment:
       PORT: "8003"
       INSTANCE_NAME: catalog-2
+      ROOT_PATH: /catalog
       SERVICE_HOST: catalog-2
       CONSUL_HTTP_ADDR: http://consul:8500
     networks: [marketplace]
@@ -58,6 +61,8 @@ services:
 
   nginx:
     image: nginx:1.28-alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     ports: ["127.0.0.1:8080:80"]
     networks: [marketplace]
     depends_on:

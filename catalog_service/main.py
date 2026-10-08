@@ -9,7 +9,8 @@ import os
 import uvicorn
 from service_discovery import consul_lifespan
 
-app = FastAPI(title="Catalog Service", lifespan=consul_lifespan("catalog", 8002))
+app = FastAPI(title="Catalog Service", lifespan=consul_lifespan("catalog", 8002),
+              root_path=os.getenv("ROOT_PATH", ""))
 
 # Получаем instance_id из переменной окружения (или значение по умолчанию)
 INSTANCE_ID = os.getenv("INSTANCE_NAME", "catalog-default")
