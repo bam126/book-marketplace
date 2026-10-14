@@ -2,94 +2,123 @@
 # pip install passlib[bcrypt] PyJWT python-multipart
 # uvicorn main:app --reload --port 8001
 # http://127.0.0.1:8001/docs
-
+#  http://127.0.0.1:8002/api-docs
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Dict, Optional
 from datetime import datetime, timedelta
 import jwt
 import hashlib
 import os
 
-app = FastAPI(title="Auth Service")
+app = FastAPI(
+    title="Auth Service",
+    description="Микросервис аутентификации и управления пользователями",
+    version="1.0.0",
+    docs_url="/api-docs",  # Swagger UI доступен по /api-docs
+    redoc_url=None
+)
 
-
+# Настройки JWT
 SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-for-lab")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# Имитация базы данных в памяти
+# In-memory хранилище
 fake_users_db: Dict[str, dict] = {}
 
 # Модели данных
 class UserRegister(BaseModel):
-    username: str
+    email: str
     password: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "email": "user@example.com",
+                "password": "securepass123"
+            }
+        }
 
 class UserLogin(BaseModel):
-    username: str
+    email: str
     password: str
 
-# Хэширование через SHA-256 (надежно и без лишних зависимостей)
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "email": "user@example.com",
+                "password": "securepass123"
+            }
+        }
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    message: str
+
+class UserResponse(BaseModel):
+    email: str
+    message: str
+
+# Хэширование паролей через SHA-256
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return hash_password(plain_password) == hashed_password
 
-# Генерация JWT токена
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-# Инициализация схемы безопасности для Swagger UI
 security = HTTPBearer()
 
-# 1. Регистрация
-@app.post("/register", tags=["Auth"])
+# Регистрация: POST /api/auth/register
+@app.post("/api/auth/register", response_model=UserResponse, tags=["Auth"],
+          summary="Регистрация нового пользователя",
+          description="Создаёт нового пользователя в системе. Email должен быть уникальным.")
 def register(user: UserRegister):
-    if user.username in fake_users_db:
-        raise HTTPException(status_code=400, detail="Пользователь уже существует")
+    if user.email in fake_users_db:
+        raise HTTPException(status_code=400, detail="Пользователь с таким email уже существует")
     
-    hashed_password = hash_password(user.password)
-    fake_users_db[user.username] = {
-        "username": user.username,
-        "password": hashed_password
+    fake_users_db[user.email] = {
+        "email": user.email,
+        "password": hash_password(user.password)
     }
-    return {"message": "Пользователь успешно зарегистрирован"}
+    return {"email": user.email, "message": "Пользователь успешно зарегистрирован"}
 
-# 2. Вход
-@app.post("/login", tags=["Auth"])
+# Вход: POST /api/auth/login
+@app.post("/api/auth/login", response_model=TokenResponse, tags=["Auth"],
+          summary="Аутентификация пользователя",
+          description="Проверяет учётные данные и возвращает JWT-токен.")
 def login(user: UserLogin):
-    db_user = fake_users_db.get(user.username)
+    db_user = fake_users_db.get(user.email)
     if not db_user or not verify_password(user.password, db_user["password"]):
-        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+        raise HTTPException(status_code=401, detail="Неверный email или пароль")
     
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username},
-        expires_delta=access_token_expires
+        data={"sub": user.email},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    return {"message": "Успешный вход", "token": access_token}
+    return {"access_token": access_token, "token_type": "bearer", "message": "Успешный вход"}
 
-# 3. Защищенный эндпоинт
-@app.get("/me", tags=["Auth"])
+# Защищённый эндпоинт: GET /api/auth/me
+@app.get("/api/auth/me", response_model=UserResponse, tags=["Auth"],
+         summary="Получить данные текущего пользователя",
+         description="Возвращает информацию о пользователе. Требует валидный JWT-токен в заголовке Authorization.")
 def get_me(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
+        email: str = payload.get("sub")
+        if email is None:
             raise HTTPException(status_code=401, detail="Невалидный токен")
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Невалидный токен")
     
-    return {"username": username, "message": "Это защищенные данные пользователя"}
+    return {"email": email, "message": "Это защищённые данные пользователя"}
