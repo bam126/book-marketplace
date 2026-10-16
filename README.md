@@ -1,177 +1,93 @@
-# Книжный маркетплейс — ЛР №2 по АИС
+# Книжный маркетплейс
 
-Совместная работа Куулара Санчая и Савельева Дмитрия. Исходные Auth и Catalog — вклад Дмитрия, сохранённый в коммите `b39db29`. Инфраструктура разрабатывается в `infra/nginx-consul`, без изменения истории `main`.
+Учебный проект Куулара Санчая и Савельева Дмитрия по АИС. ЛР №2: контейнеры, JWT, API Gateway, Consul и балансировка. ЛР №3: заказы и получение связанных данных через GraphQL. История исходных работ сохранена.
 
-Цель: запустить микросервисы в Docker, показать регистрацию в Consul, маршрутизацию и балансировку через Nginx, проверить отказ одного экземпляра каталога.
+## Запуск
 
-## Архитектура
-
-```text
-Клиент -> localhost:8080 -> Nginx
-                           | /auth/*    -> auth:8001
-                           | /catalog/* -> catalog-1:8002
-                           |            -> catalog-2:8003
-
-auth, catalog-1, catalog-2 -> Consul HTTP API (consul:8500)
-Consul -> /health каждого сервиса, каждые 5 секунд
-Consul UI -> localhost:8500/ui/
-```
-
-Все контейнеры находятся в сети `marketplace`. Только Nginx (8080) и Consul (8500) опубликованы на `127.0.0.1`. У Auth и Catalog нет опубликованных портов. Оба Catalog используют один образ `book-marketplace-catalog:lab2`; сборка объявлена у `catalog-1`, а `catalog-2` использует готовый локальный образ (`pull_policy: never`).
-
-- **Auth:** `/register`, `/login`, `/me`; пользователи в памяти, пароли — Passlib PBKDF2-SHA256 (600 000 итераций, случайная соль), JWT HS256 с ограниченным сроком действия. `SECRET_KEY` обязателен через окружение, стандартного рабочего ключа в коде нет.
-- **Catalog:** CRUD `/products`, поле `instance_id` из `INSTANCE_NAME`. Хранилища двух процессов независимы. После перезапуска процесса его товары теряются.
-- **Nginx:** удаляет префиксы `/auth/` и `/catalog/`; равномерно распределяет запросы по двум Catalog. При ошибке соединения пробует другой upstream (`max_fails=1`, `fail_timeout=5s`, максимум две попытки). Автоматический повтор уже отправленных POST не включён.
-- **Consul:** сервисы регистрируются через FastAPI lifespan и HTTP API; при штатной остановке удаляют регистрацию. Фоновая проверка регистрации с повторными попытками до 10 секунд позволяет запустить Consul позже и восстановить регистрацию после его перезапуска. Проверки здоровья выполняются каждые 5 секунд, timeout — 2 секунды.
-
-**Nginx не получает адреса из Consul.** Состав upstream задан в конфигурации, IP-адреса имён контейнеров обновляются через Docker DNS. Consul — отдельный реестр и монитор здоровья. Consul работает в учебном dev-режиме без ACL и постоянного хранения. Отказоустойчивость показана для чтения каталога при отказе одного экземпляра; Nginx и Auth остаются одиночными компонентами. Это не production-конфигурация и не репликация данных.
-
-## Структура
-
-```text
-auth_service/       main.py, requirements.txt, Dockerfile
-catalog_service/    main.py, requirements.txt, Dockerfile
-nginx/nginx.conf
-service_discovery.py
-docker-compose.yml
-.dockerignore
-.gitignore
-.env.example
-tests/integration.py
-evidence/
-README.md
-DEFENSE_GUIDE.md
-```
-
-## Запуск (PowerShell)
-
-Нужен запущенный Docker Desktop в режиме Linux containers. Команды выполняются в корне проекта. Создать секрет один раз; существующий `.env` команда не перезаписывает:
+Нужен запущенный Docker Desktop с Docker Compose. В PowerShell из корня проекта создайте `.env` **только при первом запуске**:
 
 ```powershell
-Set-Location 'C:\Users\qw\Desktop\Учеба\АИС\book-marketplace-lab2'
-if (-not (Test-Path .env)) {
+if (!(Test-Path .env)) {
     $bytes = New-Object byte[] 48
     $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
     $rng.GetBytes($bytes)
     $rng.Dispose()
     'SECRET_KEY=' + [Convert]::ToBase64String($bytes) | Set-Content .env -Encoding ascii
 }
-docker --version
-docker info
-docker compose version
-docker compose up --build -d
-docker compose up -d --wait
+docker compose up --build -d --wait
 docker compose ps
 ```
 
-Не использовать строку-заглушку из `.env.example` как секрет. `.env` исключён из Git и Docker build context. Не публиковать `docker compose config` без `--quiet`: полный вывод содержит подставленный секрет.
+`.env` не включается в Git и Docker-образы. `.env.example` описывает обязательную переменную; значение-заглушку использовать нельзя.
 
-Адреса:
+| Компонент | Адрес |
+|---|---|
+| Auth Swagger | http://localhost:8080/api/auth/api-docs |
+| Catalog Swagger | http://localhost:8080/api/catalog/api-docs |
+| Order Swagger | http://localhost:8080/api/orders/api-docs |
+| GraphQL | http://localhost:8080/graphql |
+| Consul UI | http://localhost:8500/ui/ |
 
-- Gateway: http://localhost:8080
-- Auth Swagger: http://localhost:8080/auth/docs
-- Catalog Swagger: http://localhost:8080/catalog/docs
-- Consul UI: http://localhost:8500/ui/
+Опубликованы только Nginx (8080) и Consul (8500), на loopback. Остальные сервисы доступны внутри Docker-сети.
 
-## Auth / JWT
+## Компоненты и файлы
 
-```powershell
-$base = 'http://localhost:8080'
-$user = @{username=('demo_' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()); password='Demo-password-123!'}
-$json = $user | ConvertTo-Json
-Invoke-RestMethod "$base/auth/register" -Method Post -ContentType 'application/json' -Body $json
-$login = Invoke-RestMethod "$base/auth/login" -Method Post -ContentType 'application/json' -Body $json
-$headers = @{Authorization="Bearer $($login.token)"}
-Invoke-RestMethod "$base/auth/me" -Headers $headers
-curl.exe -s -o NUL -w '%{http_code}' "$base/auth/me"
-curl.exe -s -o NUL -w '%{http_code}' -H 'Authorization: Bearer invalid' "$base/auth/me"
-```
+- `auth_service/`: `main.py` — регистрация по email, вход и `/me`, JWT HS256, Passlib PBKDF2; `requirements.txt` — зависимости; `Dockerfile` — образ.
+- `catalog_service/`: те же три файла для единой реализации CRUD товаров, валидации, пагинации и `instance_id`. Compose запускает один образ дважды с разными `INSTANCE_NAME`.
+- `order_service/`: те же три файла для создания заказов и поиска по пользователю или ID.
+- `graphql_gateway/`: те же три файла для объединения REST-данных заказов и товаров. URL зависимых сервисов передаются через окружение.
+- `service_discovery.py`: регистрация пяти экземпляров приложений в Consul, HTTP health checks, повторные попытки и дерегистрация при завершении.
+- `nginx/nginx.conf`: маршруты API, round-robin между Catalog и переключение при недоступности экземпляра.
+- `docker-compose.yml`: семь контейнеров, сеть, проверки здоровья и настройки Consul.
+- `.gitignore`, `.dockerignore`: исключения секретов, кэша и результатов тестов; `.gitattributes`: правила окончаний строк.
+- `tests/integration.py`: реальные HTTP/Docker-проверки; `artifacts/` — локальные результаты, исключённые из Git.
 
-Регистрация и `/me` с токеном — 200; оба отрицательных запроса — 401. Полный `$login` и `$headers` не выводить в материалы отчёта.
+Основные REST-префиксы: `/api/auth`, `/api/catalog`, `/api/orders`. Старые `/auth/` и `/catalog/` перенаправляются к соответствующим сервисам; схема данных соответствует ЛР №3: `email`, `access_token`, товар с `name`, `price`, `stock`.
 
-## CRUD через Gateway
+## Проверки
 
-Чтобы все операции попали в одно in-memory хранилище, на время демонстрации остановить второй экземпляр. Это отдельный сценарий; балансировка проверяется после его восстановления.
-
-```powershell
-docker stop catalog-2
-try {
-    $base = 'http://localhost:8080'
-    $book = @{title='Test book'; author='Test author'; price=150; stock=3} | ConvertTo-Json
-    $product = Invoke-RestMethod "$base/catalog/products" -Method Post -ContentType 'application/json' -Body $book
-    $product
-    $id = $product.id
-    Invoke-RestMethod "$base/catalog/products"
-    Invoke-RestMethod "$base/catalog/products/$id"
-    Invoke-RestMethod "$base/catalog/products/$id" -Method Put -ContentType 'application/json' -Body '{"price":199,"stock":5}'
-    Invoke-RestMethod "$base/catalog/products/$id" -Method Delete
-    curl.exe -s -o NUL -w '%{http_code}' "$base/catalog/products/$id"
-} finally {
-    docker start catalog-2
-}
-docker compose up -d --wait
-Start-Sleep -Seconds 6
-```
-
-POST — 201; GET/PUT/DELETE — 200; GET после удаления — 404. Список возвращает `instance_id` и `products`.
-
-## Consul и балансировка
-
-```powershell
-Invoke-RestMethod 'http://localhost:8500/v1/agent/services' | ConvertTo-Json -Depth 5
-(Invoke-RestMethod 'http://localhost:8500/v1/agent/checks').PSObject.Properties.Value | Select-Object ServiceID,Status
-1..12 | ForEach-Object { (Invoke-RestMethod 'http://localhost:8080/catalog/products').instance_id }
-```
-
-Должны быть зарегистрированы `auth`, `catalog-1`, `catalog-2`, статусы — `passing`. В последовательности ответов должны присутствовать оба Catalog. Посторонние запросы из Swagger тоже участвуют в round-robin, поэтому могут изменить наблюдаемый порядок.
-
-## Отказ и восстановление
-
-```powershell
-docker stop catalog-1
-try {
-    1..12 | ForEach-Object { (Invoke-RestMethod 'http://localhost:8080/catalog/products').instance_id }
-    Invoke-RestMethod 'http://localhost:8500/v1/agent/services' | ConvertTo-Json -Depth 5
-} finally {
-    docker start catalog-1
-}
-docker compose up -d --wait
-Start-Sleep -Seconds 6
-1..12 | ForEach-Object { (Invoke-RestMethod 'http://localhost:8080/catalog/products').instance_id }
-```
-
-После остановки ответы должны приходить от `catalog-2` без HTTP-ошибок; `catalog-1` должен исчезнуть из реестра Consul при штатной остановке. После запуска и окончания `fail_timeout` оба экземпляра снова участвуют в балансировке.
-
-## Автоматические интеграционные проверки
-
-Требуется Python 3.12+ на хосте, сторонних пакетов для тестового скрипта не нужно. Для текущего локального окружения:
-
-```powershell
-.\.venv\Scripts\python.exe tests/integration.py
-```
-
-На другом компьютере с Python:
+Для автоматического прогона нужен Python 3 со стандартной библиотекой:
 
 ```powershell
 python tests/integration.py
 ```
 
-Тест проверяет Docker healthchecks и закрытые API-порты, совпадение образов Catalog, Consul и HTTP UI, Swagger, JWT (включая подпись), отрицательные сценарии, Passlib, CRUD на каждом экземпляре через Gateway, балансировку, остановку и восстановление, запуск приложения раньше Consul. Он временно останавливает контейнеры лабораторной и восстанавливает их в `finally`. Запускать без параллельных демонстраций. Результат: `evidence/integration-results.json`, поле `passed` последнего события должно быть `true`.
+Тест временно останавливает приложения и пересоздаёт Consul. Выполняйте его на учебном стенде: данные сервисов хранятся в памяти и теряются при перезапуске. В конце тест восстанавливает семь контейнеров. Результаты: `artifacts/integration-results.json` и `artifacts/docker-compose-ps-final.txt`; секрет и полный JWT в отчёт не записываются.
 
-## Остановка и диагностика
+Проверяются JWT и отказ без токена, CRUD, валидация и пагинация Catalog, создание/чтение Order, GraphQL с деталями товаров, балансировка, отказ/возврат экземпляра, регистрация и восстановление Consul.
+
+Ручная проверка балансировки и отказа:
 
 ```powershell
-docker compose logs --tail 100 auth catalog-1 catalog-2 nginx consul
-docker compose exec -T nginx nginx -t
-docker compose down
+1..10 | ForEach-Object { (Invoke-RestMethod http://localhost:8080/api/catalog/products).instance_id }
+docker stop catalog-1
+1..10 | ForEach-Object { (Invoke-RestMethod http://localhost:8080/api/catalog/products).instance_id }
+docker start catalog-1
+Start-Sleep 6
+1..10 | ForEach-Object { (Invoke-RestMethod http://localhost:8080/api/catalog/products).instance_id }
 ```
 
-Остановка системы уничтожает данные в памяти. Для повторного запуска: `docker compose up --build -d`.
+Для демонстрации связки Order → GraphQL сначала выполните `docker stop catalog-2`, затем создайте товары через Catalog Swagger и заказ с их ID через Order Swagger. Запрос в GraphQL (подставьте `user_id` заказа):
 
-## Источники
+```graphql
+query {
+  ordersByUserId(userId: "student@example.com") {
+    id userId status
+    items { productId quantity product { id name price stock } }
+  }
+}
+```
 
-- [FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/)
-- [Consul Agent Service API](https://developer.hashicorp.com/consul/api-docs/agent/service)
-- [Nginx proxy_next_upstream](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_next_upstream)
-- [Passlib PBKDF2](https://passlib.readthedocs.io/en/stable/lib/passlib.hash.pbkdf2_digest.html)
-- Фактические результаты этой реализации — в `evidence/`; сценарий защиты — `DEFENSE_GUIDE.md`.
+После демонстрации: `docker start catalog-2`. Для остановки стенда: `docker compose down`.
+
+## Ограничения учебной реализации
+
+Catalog-экземпляры имеют независимые хранилища в памяти. Балансировка обеспечивает доступность HTTP, но не репликацию товаров. Поэтому связку заказов и товаров проверяем с одним активным Catalog; балансировку и отказ — отдельно с двумя. Общая БД потребует отдельного архитектурного решения.
+
+JWT защищает `/api/auth/me`; Catalog, Order и GraphQL пока публичные. Order не резервирует остатки и не проверяет наличие товара. Отсутствующие связанные данные приводят к GraphQL `errors`, даже при HTTP 200. Пользователи, товары и заказы не переживают перезапуск своих контейнеров.
+
+Consul работает в dev-режиме. Nginx использует явно заданные upstream и Docker DNS; каталог Consul автоматически не меняет конфигурацию Nginx.
+
+## Совместная работа
+
+`main` — проверенная версия. Текущая интеграция — `lab-3/integration`. Следующую лабораторную начинаем отдельной веткой от актуальной `main`, проверяем через PR и объединяем обычным merge с сохранением коммитов авторов. После принятия законченной лабораторной ставим тег `lab-2`, `lab-3` и далее на согласованный коммит. Полные копии проекта для каждой лабораторной не нужны.
