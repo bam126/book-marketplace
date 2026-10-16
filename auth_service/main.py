@@ -1,8 +1,7 @@
 # pip install fastapi uvicorn
-# pip install passlib[bcrypt] PyJWT python-multipart
-# uvicorn main:app --reload --port 8001
-# http://127.0.0.1:8001/docs
-#  http://127.0.0.1:8002/api-docs
+# Dependencies: auth_service/requirements.txt
+# From project root: uvicorn auth_service.main:app --port 8001
+# http://127.0.0.1:8080/api/auth/api-docs
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -10,19 +9,24 @@ from pydantic import BaseModel, EmailStr
 from typing import Dict, Optional
 from datetime import datetime, timedelta
 import jwt
-import hashlib
+from passlib.hash import pbkdf2_sha256
 import os
+from service_discovery import consul_lifespan
 
 app = FastAPI(
     title="Auth Service",
     description="Микросервис аутентификации и управления пользователями",
     version="1.0.0",
-    docs_url="/api-docs",  # Swagger UI доступен по /api-docs
+    docs_url="/api/auth/api-docs",
+    openapi_url="/api/auth/openapi.json",
+    lifespan=consul_lifespan("auth", 8001),
     redoc_url=None
 )
 
 # Настройки JWT
-SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-for-lab")
+SECRET_KEY = os.environ["SECRET_KEY"]
+if len(SECRET_KEY.encode()) < 32 or SECRET_KEY.startswith("REPLACE_"):
+    raise RuntimeError("Set SECRET_KEY to a random secret of at least 32 bytes")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -63,12 +67,12 @@ class UserResponse(BaseModel):
     email: str
     message: str
 
-# Хэширование паролей через SHA-256
+# Passlib: соль и PBKDF2-SHA256 вместо одиночного SHA-256.
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+    return pbkdf2_sha256.using(rounds=600_000).hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return hash_password(plain_password) == hashed_password
+    return pbkdf2_sha256.verify(plain_password, hashed_password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
@@ -85,7 +89,7 @@ security = HTTPBearer()
 def register(user: UserRegister):
     if user.email in fake_users_db:
         raise HTTPException(status_code=400, detail="Пользователь с таким email уже существует")
-    
+
     fake_users_db[user.email] = {
         "email": user.email,
         "password": hash_password(user.password)
@@ -100,7 +104,7 @@ def login(user: UserLogin):
     db_user = fake_users_db.get(user.email)
     if not db_user or not verify_password(user.password, db_user["password"]):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
-    
+
     access_token = create_access_token(
         data={"sub": user.email},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -120,5 +124,9 @@ def get_me(credentials: HTTPAuthorizationCredentials = Depends(security)):
             raise HTTPException(status_code=401, detail="Невалидный токен")
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Невалидный токен")
-    
+
     return {"email": email, "message": "Это защищённые данные пользователя"}
+
+@app.get("/health", tags=["Health"])
+def health():
+    return {"status": "healthy", "service": "auth"}

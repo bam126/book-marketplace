@@ -3,12 +3,15 @@ from pydantic import BaseModel, Field
 from typing import Dict, List, Optional
 from datetime import datetime
 import uuid
+from service_discovery import consul_lifespan
 
 app = FastAPI(
     title="Order Service",
     description="Микросервис управления заказами пользователей",
     version="1.0.0",
-    docs_url="/api-docs",
+    docs_url="/api/orders/api-docs",
+    openapi_url="/api/orders/openapi.json",
+    lifespan=consul_lifespan("order", 8004),
     redoc_url=None
 )
 
@@ -85,8 +88,13 @@ def get_orders_by_user(
 # GET /api/orders/{order_id} — получить заказ по ID
 @app.get("/api/orders/{order_id}", response_model=OrderResponse, tags=["Orders"],
          summary="Получить заказ по ID",
-         description="Возвращает详细信息 о заказе по его уникальному идентификатору.")
+         description="Возвращает подробную информацию о заказе по его уникальному идентификатору.")
 def get_order(order_id: str):
     if order_id not in orders_db:
         raise HTTPException(status_code=404, detail="Заказ не найден")
     return orders_db[order_id]
+
+@app.get("/health", tags=["Health"])
+@app.get("/", tags=["Health"], include_in_schema=False)
+def health():
+    return {"status": "healthy", "service": "order"}

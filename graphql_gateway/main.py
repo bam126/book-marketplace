@@ -1,12 +1,14 @@
+import os
 import strawberry
+from service_discovery import consul_lifespan
 import httpx
 from fastapi import FastAPI
 from strawberry.fastapi import GraphQLRouter
 from typing import List, Optional
 
 # --- Базовые URL REST-сервисов ---
-ORDER_SERVICE_URL = "http://127.0.0.1:8003"
-CATALOG_SERVICE_URL = "http://127.0.0.1:8002"
+ORDER_SERVICE_URL = os.getenv("ORDER_SERVICE_URL", "http://127.0.0.1:8004").rstrip("/")
+CATALOG_SERVICE_URL = os.getenv("CATALOG_SERVICE_URL", "http://127.0.0.1:8002").rstrip("/")
 
 # --- GraphQL типы ---
 
@@ -35,7 +37,7 @@ class Order:
 # --- Вспомогательные функции ---
 
 async def get_orders_by_user_id(user_id: str) -> List[dict]:
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=5.0) as client:
         response = await client.get(
             f"{ORDER_SERVICE_URL}/api/orders",
             params={"user_id": user_id}
@@ -44,7 +46,7 @@ async def get_orders_by_user_id(user_id: str) -> List[dict]:
         return response.json()
 
 async def get_product_by_id(product_id: int) -> dict:
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=5.0) as client:
         response = await client.get(
             f"{CATALOG_SERVICE_URL}/api/catalog/products/{product_id}"
         )
@@ -55,13 +57,13 @@ async def get_product_by_id(product_id: int) -> dict:
 
 async def resolve_orders_by_user_id(user_id: str) -> List[Order]:
     raw_orders = await get_orders_by_user_id(user_id)
-    
+
     orders = []
     for raw_order in raw_orders:
         order_items = []
         for item in raw_order["items"]:
             product_data = await get_product_by_id(item["product_id"])
-            
+
             order_item = OrderItem(
                 product_id=item["product_id"],
                 quantity=item["quantity"],
@@ -74,7 +76,7 @@ async def resolve_orders_by_user_id(user_id: str) -> List[Order]:
                 )
             )
             order_items.append(order_item)
-        
+
         order = Order(
             id=raw_order["id"],
             user_id=raw_order["user_id"],
@@ -83,7 +85,7 @@ async def resolve_orders_by_user_id(user_id: str) -> List[Order]:
             items=order_items
         )
         orders.append(order)
-    
+
     return orders
 
 # --- GraphQL Query ---
@@ -105,11 +107,14 @@ graphql_app = GraphQLRouter(schema)
 app = FastAPI(
     title="GraphQL Gateway",
     description="API Gateway на GraphQL",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url=None, redoc_url=None, openapi_url=None,
+    lifespan=consul_lifespan("graphql", 8005)
 )
 
 app.include_router(graphql_app, prefix="/graphql")
 
 @app.get("/", tags=["Health"])
+@app.get("/health", tags=["Health"])
 def health():
     return {"status": "healthy", "service": "graphql-gateway"}
