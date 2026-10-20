@@ -1,7 +1,0 @@
-* text=auto
-*.py text eol=lf
-*.yml text eol=lf
-*.conf text eol=lf
-*.md text eol=lf
-Dockerfile text eol=lf
-*.txt text eol=lf
