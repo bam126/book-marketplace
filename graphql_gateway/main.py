@@ -1,5 +1,7 @@
 import os
 import strawberry
+from strawberry.dataloader import DataLoader
+from strawberry.types import Info
 from service_discovery import consul_lifespan
 import httpx
 from fastapi import FastAPI
@@ -24,7 +26,13 @@ class Product:
 class OrderItem:
     product_id: int = strawberry.field(description="ID товара из Catalog")
     quantity: int = strawberry.field(description="Количество единиц товара")
-    product: Product = strawberry.field(description="Детали товара из Catalog-сервиса")
+    @strawberry.field(description="Детали товара из Catalog-сервиса")
+    async def product(self, info: Info) -> Product:
+        data = await info.context["product_loader"].load(self.product_id)
+        return Product(
+            id=data["id"], name=data["name"], price=data["price"],
+            description=data.get("description"), stock=data.get("stock", 0)
+        )
 
 @strawberry.type(description="Заказ пользователя")
 class Order:
@@ -45,10 +53,11 @@ async def get_orders_by_user_id(user_id: str) -> List[dict]:
         response.raise_for_status()
         return response.json()
 
-async def get_product_by_id(product_id: int) -> dict:
+async def load_products(product_ids: List[int]) -> List[dict]:
     async with httpx.AsyncClient(timeout=5.0) as client:
-        response = await client.get(
-            f"{CATALOG_SERVICE_URL}/api/catalog/products/{product_id}"
+        response = await client.post(
+            f"{CATALOG_SERVICE_URL}/api/catalog/products/batch",
+            json=product_ids
         )
         response.raise_for_status()
         return response.json()
@@ -62,18 +71,9 @@ async def resolve_orders_by_user_id(user_id: str) -> List[Order]:
     for raw_order in raw_orders:
         order_items = []
         for item in raw_order["items"]:
-            product_data = await get_product_by_id(item["product_id"])
-
             order_item = OrderItem(
                 product_id=item["product_id"],
                 quantity=item["quantity"],
-                product=Product(
-                    id=product_data["id"],
-                    name=product_data["name"],
-                    price=product_data["price"],
-                    description=product_data.get("description"),
-                    stock=product_data.get("stock", 0)
-                )
             )
             order_items.append(order_item)
 
@@ -102,7 +102,12 @@ class Query:
 
 schema = strawberry.Schema(query=Query)
 
-graphql_app = GraphQLRouter(schema)
+async def get_context():
+    # Отдельный loader и кэш для каждого HTTP-запроса.
+    return {"product_loader": DataLoader(load_fn=load_products)}
+
+
+graphql_app = GraphQLRouter(schema, context_getter=get_context, graphql_ide="graphiql")
 
 app = FastAPI(
     title="GraphQL Gateway",

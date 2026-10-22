@@ -74,6 +74,12 @@ def get_products(
         "products": paginated
     }
 
+@app.post("/api/catalog/products/batch", response_model=List[ProductResponse], tags=["Catalog"],
+          summary="Получить несколько товаров по ID")
+def get_products_batch(product_ids: List[int]):
+    # Порядок ответа совпадает с порядком ID, переданных DataLoader.
+    return [get_product(product_id) for product_id in product_ids]
+
 # GET /api/catalog/products/{id}
 @app.get("/api/catalog/products/{product_id}", response_model=ProductResponse, tags=["Catalog"],
          summary="Получить товар по ID",
