@@ -1,50 +1,23 @@
+from contextlib import asynccontextmanager
+import asyncio
+import json
+import uuid
+from typing import List, Literal
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
-from typing import Dict, List, Optional
-from datetime import datetime
-import uuid
 from service_discovery import consul_lifespan
+from messaging import Worker, database, transaction, initialize, enqueue, now, log
 
-app = FastAPI(
-    title="Order Service",
-    description="Микросервис управления заказами пользователей",
-    version="1.0.0",
-    docs_url="/api/orders/api-docs",
-    openapi_url="/api/orders/openapi.json",
-    lifespan=consul_lifespan("order", 8004),
-    redoc_url=None
-)
-
-# In-memory хранилище заказов
-orders_db: Dict[str, dict] = {}
-
-# Модели данных
 class OrderItemCreate(BaseModel):
-    product_id: int = Field(..., description="ID товара из Catalog-сервиса")
-    quantity: int = Field(..., gt=0, description="Количество товара")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "product_id": 1,
-                "quantity": 2
-            }
-        }
+    product_id: int
+    quantity: int = Field(..., gt=0)
 
 class OrderCreate(BaseModel):
-    user_id: str = Field(..., description="ID пользователя")
-    items: List[OrderItemCreate] = Field(..., description="Список товаров в заказе")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "user_id": "user@example.com",
-                "items": [
-                    {"product_id": 1, "quantity": 2},
-                    {"product_id": 3, "quantity": 1}
-                ]
-            }
-        }
+    user_id: str
+    items: List[OrderItemCreate] = Field(..., min_length=1)
+    # Defaults preserve the request format used in LR3.
+    total_amount: float = Field(0, ge=0)
+    payment_outcome: Literal["success", "fail"] = "success"
 
 class OrderItemResponse(BaseModel):
     product_id: int
@@ -54,47 +27,84 @@ class OrderResponse(BaseModel):
     id: str
     user_id: str
     items: List[OrderItemResponse]
+    total_amount: float
     created_at: str
     status: str
+    event_delivery: str
 
-# POST /api/orders — создать заказ
-@app.post("/api/orders", response_model=OrderResponse, status_code=201, tags=["Orders"],
-          summary="Создать новый заказ",
-          description="Создаёт новый заказ для пользователя. Содержит список товаров с их количеством.")
+def payment_result(db, event):
+    order_id = event["orderId"]
+    row = db.execute("SELECT body,status FROM orders WHERE id=?", (order_id,)).fetchone()
+    if not row:
+        raise ValueError("Unknown order")
+    if row["status"] != "PENDING":
+        return "DUPLICATE result ignored; status=" + row["status"]
+    order = json.loads(row["body"])
+    if event["eventType"] == "PaymentCompleted":
+        status = "CONFIRMED"
+    else:
+        status = "CANCELLED"
+        enqueue(db, "OrderCancelled", order_id, userId=order["user_id"], reason=event.get("reason", "Payment failed"))
+    db.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
+    return "STATE PENDING -> " + status + ("; COMPENSATION OrderCancelled queued" if status == "CANCELLED" else "")
+
+worker = Worker("order.payments", payment_result)
+
+@asynccontextmanager
+async def lifespan(app):
+    initialize()
+    with database() as db:
+        db.execute("CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY,body TEXT NOT NULL,status TEXT NOT NULL)")
+        db.commit()
+    worker.start()
+    async with consul_lifespan("order", 8004)(app):
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(worker.stop)
+
+app = FastAPI(title="Order Service", description="Заказы и Saga через RabbitMQ", version="1.0.0",
+    docs_url="/api/orders/api-docs", openapi_url="/api/orders/openapi.json", redoc_url=None, lifespan=lifespan)
+
+def response(db, row):
+    order = json.loads(row["body"])
+    order["status"] = row["status"]
+    pending = db.execute("SELECT 1 FROM outbox WHERE order_id=? AND event_type='OrderCreated' AND sent_at IS NULL", (order["id"],)).fetchone()
+    order["event_delivery"] = "QUEUED" if pending else "PUBLISHED"
+    return order
+
+@app.post("/api/orders", response_model=OrderResponse, status_code=201, tags=["Orders"], summary="Создать заказ")
 def create_order(order: OrderCreate):
     order_id = str(uuid.uuid4())
-    new_order = {
-        "id": order_id,
-        "user_id": order.user_id,
-        "items": [{"product_id": item.product_id, "quantity": item.quantity} for item in order.items],
-        "created_at": datetime.utcnow().isoformat(),
-        "status": "pending"
-    }
-    orders_db[order_id] = new_order
-    return new_order
+    new_order = {"id": order_id, "user_id": order.user_id,
+        "items": [item.model_dump() for item in order.items], "total_amount": order.total_amount,
+        "created_at": now(), "status": "PENDING"}
+    with transaction() as db:
+        db.execute("INSERT INTO orders VALUES(?,?,?)", (order_id, json.dumps(new_order), "PENDING"))
+        enqueue(db, "OrderCreated", order_id, userId=order.user_id,
+            items=[{"productId": item.product_id, "quantity": item.quantity} for item in order.items],
+            totalAmount=order.total_amount, paymentOutcome=order.payment_outcome, createdAt=new_order["created_at"])
+    log.info("CREATED status=PENDING; OrderCreated QUEUED in SQLite orderId=%s", order_id)
+    return {**new_order, "event_delivery": "QUEUED"}
 
-# GET /api/orders — получить заказы пользователя
-@app.get("/api/orders", response_model=List[OrderResponse], tags=["Orders"],
-         summary="Получить заказы пользователя",
-         description="Возвращает список всех заказов указанного пользователя.")
-def get_orders_by_user(
-    user_id: str = Query(..., description="ID пользователя (email)")
-):
-    user_orders = [order for order in orders_db.values() if order["user_id"] == user_id]
-    if not user_orders:
-        raise HTTPException(status_code=404, detail=f"Заказы для пользователя {user_id} не найдены")
-    return user_orders
+@app.get("/api/orders", response_model=List[OrderResponse], tags=["Orders"])
+def get_orders_by_user(user_id: str = Query(...)):
+    with database() as db:
+        rows = db.execute("SELECT * FROM orders ORDER BY rowid").fetchall()
+        orders = [response(db, row) for row in rows if json.loads(row["body"])["user_id"] == user_id]
+    if not orders:
+        raise HTTPException(status_code=404, detail="Заказы пользователя не найдены")
+    return orders
 
-# GET /api/orders/{order_id} — получить заказ по ID
-@app.get("/api/orders/{order_id}", response_model=OrderResponse, tags=["Orders"],
-         summary="Получить заказ по ID",
-         description="Возвращает подробную информацию о заказе по его уникальному идентификатору.")
+@app.get("/api/orders/{order_id}", response_model=OrderResponse, tags=["Orders"])
 def get_order(order_id: str):
-    if order_id not in orders_db:
-        raise HTTPException(status_code=404, detail="Заказ не найден")
-    return orders_db[order_id]
+    with database() as db:
+        row = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Заказ не найден")
+        return response(db, row)
 
 @app.get("/health", tags=["Health"])
-@app.get("/", tags=["Health"], include_in_schema=False)
+@app.get("/", include_in_schema=False)
 def health():
-    return {"status": "healthy", "service": "order"}
+    return {"status": "healthy", "service": "order", "broker": "connected" if worker.connected.is_set() else "retrying"}

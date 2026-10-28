@@ -1,5 +1,17 @@
 name: book-marketplace
 
+x-broker-env: &broker-env
+  RABBITMQ_HOST: rabbitmq
+  RABBITMQ_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
+  RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+
+x-worker-health: &worker-health
+  test: ["CMD", "python", "-c", "import os,sqlite3; db=sqlite3.connect(os.environ['SERVICE_DB_PATH']); db.execute('SELECT count(*) FROM inbox'); db.close()"]
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 10s
+
 x-app-health: &app-health
   interval: 5s
   timeout: 3s
@@ -62,10 +74,16 @@ services:
       dockerfile: order_service/Dockerfile
     image: book-marketplace-order:local
     environment:
+      <<: *broker-env
+      SERVICE_DB_PATH: /data/order.sqlite
       PORT: "8004"
       INSTANCE_NAME: order
       SERVICE_HOST: order
       CONSUL_HTTP_ADDR: http://consul:8500
+    volumes: [order_data:/data]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
     networks: [marketplace]
     healthcheck:
       <<: *app-health
@@ -89,6 +107,54 @@ services:
       <<: *app-health
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health', timeout=2)"]
     stop_grace_period: 20s
+
+  payment:
+    build:
+      context: .
+      dockerfile: payment_service/Dockerfile
+    image: book-marketplace-payment:local
+    environment:
+      <<: *broker-env
+      SERVICE_DB_PATH: /data/payment.sqlite
+    volumes: [payment_data:/data]
+    networks: [marketplace]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck: *worker-health
+    stop_grace_period: 20s
+
+  notification:
+    build:
+      context: .
+      dockerfile: notification_service/Dockerfile
+    image: book-marketplace-notification:local
+    environment:
+      <<: *broker-env
+      SERVICE_DB_PATH: /data/notification.sqlite
+    volumes: [notification_data:/data]
+    networks: [marketplace]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck: *worker-health
+    stop_grace_period: 20s
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    ports: ["127.0.0.1:15672:15672"]
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    networks: [marketplace]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
 
   nginx:
     image: nginx:1.28-alpine
@@ -123,3 +189,9 @@ services:
 networks:
   marketplace:
     driver: bridge
+
+volumes:
+  order_data:
+  payment_data:
+  notification_data:
+  rabbitmq_data:
