@@ -9,11 +9,16 @@
 
 В **ЛР №3** добавлены заказы и GraphQL для получения заказов вместе с данными о книгах.
 
+В **ЛР №4** добавлена Saga через RabbitMQ: Order создаёт заказ, Payment имитирует оплату, Notification пишет уведомление в лог. При ошибке оплаты заказ отменяется. Заказы и ожидающие отправки события сохраняются в SQLite.
+
 ## Сервисы
 
 - **Auth** — регистрация пользователей, вход и проверка JWT.
 - **Catalog** — добавление, просмотр, изменение и удаление книг.
 - **Order** — создание и просмотр заказов.
+- **Payment** — имитация успешной или неуспешной оплаты через события.
+- **Notification** — журнал уведомлений об оплате и отмене заказа.
+- **RabbitMQ** — передача событий между сервисами.
 - **GraphQL Gateway** — получение связанных данных из Order и Catalog.
 - **Nginx** — общий вход в API и распределение запросов к Catalog.
 - **Consul** — регистрация сервисов и проверка их доступности.
@@ -30,6 +35,16 @@ if (!(Test-Path .env)) {
     $rng.Dispose()
     'SECRET_KEY=' + [Convert]::ToBase64String($bytes) | Set-Content .env -Encoding ascii
 }
+if (!(Select-String -Path .env -Pattern '^RABBITMQ_USER=' -Quiet)) {
+    'RABBITMQ_USER=student' | Add-Content .env -Encoding ascii
+}
+if (!(Select-String -Path .env -Pattern '^RABBITMQ_PASSWORD=' -Quiet)) {
+    $bytes = New-Object byte[] 32
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    $rng.GetBytes($bytes)
+    $rng.Dispose()
+    'RABBITMQ_PASSWORD=' + [Convert]::ToBase64String($bytes) | Add-Content .env -Encoding ascii
+}
 docker compose up --build -d --wait
 ```
 
@@ -42,7 +57,10 @@ docker compose up --build -d --wait
 - [Order Swagger](http://localhost:8080/api/orders/api-docs)
 - [GraphQL](http://localhost:8080/graphql)
 - [Consul](http://localhost:8500/ui/)
+- [RabbitMQ Management](http://localhost:15672/) — логин и пароль из локального `.env`.
+
+Сценарии Saga, диаграмма и команды PowerShell: [LAB4.md](LAB4.md).
 
 Остановка проекта: `docker compose down`.
 
-**Ограничение:** данные хранятся в памяти и теряются при перезапуске. У двух экземпляров Catalog нет общей базы данных. Для демонстрации заказов с данными о книгах сначала остановите второй экземпляр командой `docker stop catalog-2`, затем создавайте книги и заказы. После демонстрации верните его командой `docker start catalog-2`.
+**Ограничение:** пользователи и товары хранятся в памяти и теряются при перезапуске. Заказы сохраняются в Docker volume SQLite; не используйте `docker compose down -v`, если хотите сохранить данные. У двух экземпляров Catalog нет общей базы данных. Для демонстрации заказов с данными о книгах сначала остановите второй экземпляр командой `docker stop catalog-2`, затем создавайте книги и заказы. После демонстрации верните его командой `docker start catalog-2`.
