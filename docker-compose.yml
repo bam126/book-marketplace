@@ -146,7 +146,7 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
-    ports: ["127.0.0.1:15672:15672"]
+    ports: ["127.0.0.1:18072:15672"]
     volumes: [rabbitmq_data:/var/lib/rabbitmq]
     networks: [marketplace]
     healthcheck:

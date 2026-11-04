@@ -1,3 +1,4 @@
+from payment_breaker import check_payment, breaker
 from contextlib import asynccontextmanager
 import asyncio
 import json
@@ -108,3 +109,21 @@ def get_order(order_id: str):
 @app.get("/", include_in_schema=False)
 def health():
     return {"status": "healthy", "service": "order", "broker": "connected" if worker.connected.is_set() else "retrying"}
+
+@app.get(
+    "/api/orders/{order_id}/payment-status",
+    tags=["Payment"],
+    summary="Проверить оплату через gRPC и Circuit Breaker",
+)
+def get_payment_status(
+    order_id: str,
+    amount: float = Query(500, ge=0),
+    simulate_failure: bool = False,
+):
+    result = check_payment(order_id, amount, simulate_failure)
+
+    return {
+        "order_id": order_id,
+        **result,
+        "circuit_breaker": breaker.current_state.upper(),
+    }

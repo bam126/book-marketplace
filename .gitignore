@@ -6,3 +6,6 @@ artifacts/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+.venv-lab5/
+__pycache__/
+*.pyc
