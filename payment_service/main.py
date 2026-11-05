@@ -2,6 +2,7 @@
 import json
 import signal
 from messaging import Worker, initialize, enqueue, now
+from payment_service.gRPC_server import start_grpc_server
 
 def process_payment(db, event):
     order_id = event["orderId"]
@@ -24,9 +25,17 @@ def process_payment(db, event):
 
 if __name__ == "__main__":
     initialize()
+
+    grpc_server = start_grpc_server()
     worker = Worker("payment.orders", process_payment)
+
     signal.signal(signal.SIGTERM, lambda *_: worker.stop_event.set())
     signal.signal(signal.SIGINT, lambda *_: worker.stop_event.set())
+
     worker.start()
-    worker.stop_event.wait()
-    worker.stop()
+
+    try:
+        worker.stop_event.wait()
+    finally:
+        worker.stop()
+        grpc_server.stop(3).wait()
