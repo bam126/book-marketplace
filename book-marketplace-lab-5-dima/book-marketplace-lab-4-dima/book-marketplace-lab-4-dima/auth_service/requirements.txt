@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+pydantic
+PyJWT
+passlib==1.7.4
